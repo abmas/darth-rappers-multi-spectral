@@ -2,6 +2,7 @@
 Process RAW file from Mira220 RGB-IR camera
 Pattern: [B G R G; G I G I; R G B G; G I G I] with horizontal flip
 Optional spectral correction and calibration (black, white, both, none)
+Generates RGB, RGB-IR mosaic, and NDVI visualizations.
 """
 
 import sys
@@ -131,38 +132,60 @@ if __name__ == "__main__":
         print(f"[{get_timestamp()}] Spectral correction disabled")
         R_corr, G_corr, B_corr = R, G, B
 
+    # Build RGB and RGB-IR mosaic
     rgb = build_rgb(R_corr, G_corr, B_corr)
     rgbir_mosaic = create_rgbir_mosaic(R_corr, G_corr, B_corr, I)
-    ndvi = calculate_ndvi(I, R_corr)
 
-    ndvi_mean, ndvi_median, ndvi_min, ndvi_max = ndvi.mean(), np.median(ndvi), ndvi.min(), ndvi.max()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+
+    # Save RGB
+    plt.figure(figsize=(10, 8))
+    plt.imshow(rgb)
+    plt.title('RGB Image (Calibrated + Spectral Corrected)', fontsize=14, fontweight='bold')
+    plt.axis('off')
+    rgb_file = f'{raw_filename}_RGB_{timestamp}.png'
+    plt.savefig(rgb_file, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"[{get_timestamp()}] Saved: {rgb_file}")
+
+    # Save RGB-IR mosaic
+    plt.figure(figsize=(10, 10))
+    plt.imshow(rgbir_mosaic)
+    plt.title('RGB-IR Mosaic (R|G / B|IR)', fontsize=14, fontweight='bold')
+    plt.axis('off')
+    mosaic_file = f'{raw_filename}_Mosaic_{timestamp}.png'
+    plt.savefig(mosaic_file, dpi=150, bbox_inches='tight')
+    plt.close()
+    print(f"[{get_timestamp()}] Saved: {mosaic_file}")
+
+    # Compute NDVI and statistics
+    ndvi = calculate_ndvi(I, R_corr)
+    ndvi_mean, ndvi_median, ndvi_min, ndvi_max = (
+        ndvi.mean(),
+        np.median(ndvi),
+        ndvi.min(),
+        ndvi.max(),
+    )
 
     print(f"\n[{get_timestamp()}] NDVI Statistics:")
     print(f"  Mean: {ndvi_mean:.3f}, Median: {ndvi_median:.3f}")
     print(f"  Range: [{ndvi_min:.3f}, {ndvi_max:.3f}]")
 
-    # NDVI visualization
-    print(f"[{get_timestamp()}] Creating NDVI visualization (no numeric overlay)")
+    # NDVI Visualization
+    print(f"[{get_timestamp()}] Creating NDVI visualization")
 
-    from matplotlib.colors import ListedColormap, BoundaryNorm
-
-    # Define NDVI color thresholds (below 0.1 = neutral gray)
     colors_ndvi = ['gray', 'red', 'yellow', 'lightgreen', 'darkgreen']
     bounds = [-1.0, 0.1, 0.3, 0.5, 0.7, 1.0]
     cmap_ndvi = ListedColormap(colors_ndvi)
     norm_ndvi = BoundaryNorm(bounds, cmap_ndvi.N)
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     fig = plt.figure(figsize=(16, 5))
-
-    # NDVI False Color
     ax1 = plt.subplot(1, 3, 1)
     im = ax1.imshow(ndvi, cmap=cmap_ndvi, norm=norm_ndvi)
-    ax1.set_title(f'NDVI False Color (Custom Thresholds)\nMean: {ndvi_mean:.3f}', fontsize=12, fontweight='bold')
+    ax1.set_title(f'NDVI False Color\nMean: {ndvi_mean:.3f}', fontsize=12, fontweight='bold')
     ax1.axis('off')
     plt.colorbar(im, ax=ax1, fraction=0.046, pad=0.04, ticks=bounds)
 
-    # NDVI Histogram
     ax2 = plt.subplot(1, 3, 2)
     ax2.hist(ndvi.flatten(), bins=100, color='green', alpha=0.7, edgecolor='black')
     ax2.set_xlabel('NDVI')
@@ -172,19 +195,18 @@ if __name__ == "__main__":
     ax2.axvline(ndvi_median, color='blue', linestyle='--', linewidth=2, label=f'Median: {ndvi_median:.3f}')
     ax2.legend()
 
-    # RGB + NDVI Overlay (no NDVI text)
     ax3 = plt.subplot(1, 3, 3)
     ax3.imshow(rgb)
-    veg_mask = ndvi > 0
-    ndvi_overlay = np.ma.masked_where(~veg_mask, ndvi)
-    im_overlay = ax3.imshow(ndvi_overlay, cmap=cmap_ndvi, norm=norm_ndvi, alpha=0.5)
-    ax3.set_title('RGB + NDVI Overlay (Vegetation)', fontsize=12, fontweight='bold')
+    im_overlay = ax3.imshow(ndvi, cmap=cmap_ndvi, norm=norm_ndvi, alpha=0.5)
+    ax3.set_title('RGB + NDVI Overlay', fontsize=12, fontweight='bold')
     ax3.axis('off')
     plt.colorbar(im_overlay, ax=ax3, fraction=0.046, pad=0.04, ticks=bounds)
 
     plt.tight_layout()
-    plt.savefig(f'{raw_filename}_NDVI_{timestamp}.png', dpi=150, bbox_inches='tight')
+    ndvi_file = f'{raw_filename}_NDVI_{timestamp}.png'
+    plt.savefig(ndvi_file, dpi=150, bbox_inches='tight')
     plt.close()
+    print(f"[{get_timestamp()}] Saved: {ndvi_file}")
 
     print(f"\n[{get_timestamp()}] Processing complete for {raw_filename}")
     print(f"Spectral correction: {spectral_flag.upper()}")
