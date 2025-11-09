@@ -1,16 +1,14 @@
 """
 Process RAW file from Mira220 RGB-IR camera
 Pattern: [B G R G; G I G I; R G B G; G I G I] with horizontal flip
-Optional calibration (black, white, both, none)
-Optional spectral correction (enabled/disabled by argument)
+Optional spectral correction and calibration (black, white, both, none)
 """
 
 import sys
 import numpy as np
 import matplotlib.pyplot as plt
 from datetime import datetime
-from matplotlib.colors import ListedColormap
-import os
+from matplotlib.colors import ListedColormap, BoundaryNorm
 
 def get_timestamp():
     return datetime.now().strftime("%H:%M:%S")
@@ -28,26 +26,15 @@ def read_raw(filename, width=None, height=None):
                 break
     return data.reshape((height, width))
 
-def apply_calibration(raw_data, mode):
-    """Apply optional dark/white calibration"""
-    dark = white = None
+def calibrate(raw_data, dark_frame=None, white_frame=None):
+    """Apply dark/white calibration"""
     calibrated = raw_data.astype(np.float32)
-
-    if mode in ["black", "both"] and os.path.exists("black.raw"):
-        print(f"[{get_timestamp()}] Loading black.raw for dark calibration")
-        dark = read_raw("black.raw")
-        calibrated -= dark.astype(np.float32)
-    elif mode in ["black", "both"]:
-        print(f"[{get_timestamp()}] Warning: black.raw not found, skipping dark calibration")
-
-    if mode in ["white", "both"] and os.path.exists("white.raw"):
-        print(f"[{get_timestamp()}] Loading white.raw for white calibration")
-        white = read_raw("white.raw")
-        white = np.maximum(white.astype(np.float32), 1)
-        calibrated /= white
-    elif mode in ["white", "both"]:
-        print(f"[{get_timestamp()}] Warning: white.raw not found, skipping white calibration")
-
+    if dark_frame is not None:
+        calibrated = calibrated - dark_frame.astype(np.float32)
+    if white_frame is not None:
+        white_mean = white_frame.mean()
+        dark_mean = dark_frame.mean() if dark_frame is not None else 0
+        calibrated = calibrated / (white_frame.astype(np.float32) - dark_mean) * (white_mean - dark_mean)
     return np.clip(calibrated, 0, None)
 
 def debayer_4x4_hflip(raw_data):
@@ -60,7 +47,7 @@ def debayer_4x4_hflip(raw_data):
     I = np.zeros((out_h, out_w), dtype=np.float32)
     for i in range(out_h):
         for j in range(out_w):
-            block = raw_data[i*4:(i+1)*4, j*4:(j+1)*4]
+            block = raw_data[i*4:(i+1)*4, j*4:(j+1)*4].astype(np.float32)
             R[i, j] = (block[0, 1] + block[2, 3]) / 2.0
             B[i, j] = (block[0, 3] + block[2, 1]) / 2.0
             G[i, j] = (block[0, 0] + block[0, 2] + block[1, 1] + block[1, 3] +
@@ -70,7 +57,7 @@ def debayer_4x4_hflip(raw_data):
 
 def apply_spectral_correction(R, G, B, I):
     """Apply spectral cross-talk correction"""
-    R_corr = R - 0.25*G - 0.5*I
+    R_corr = R - 0.4*G - 0.3*I
     G_corr = G - 0.3*B - 0.3*I
     B_corr = B - 0.15*R - 0.15*G - 0.4*I
     return np.clip(R_corr, 0, None), np.clip(G_corr, 0, None), np.clip(B_corr, 0, None)
@@ -109,27 +96,31 @@ def calculate_ndvi(I, R):
 # ============================================================================
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python process_raw.py <raw_filename> [--calib none|black|white|both] [--spectral-corr on|off]")
+        print("Usage: python process_raw_with_arguments.py <raw_filename> [--calib none|black|white|both] [--spectral-corr on|off]")
         sys.exit(1)
 
     raw_filename = sys.argv[1]
-    calib_mode = "none"
+    calib_flag = "none"
     spectral_flag = "on"
 
     if "--calib" in sys.argv:
-        calib_mode = sys.argv[sys.argv.index("--calib") + 1].lower()
+        calib_flag = sys.argv[sys.argv.index("--calib") + 1].lower()
     if "--spectral-corr" in sys.argv:
         spectral_flag = sys.argv[sys.argv.index("--spectral-corr") + 1].lower()
 
     print(f"[{get_timestamp()}] Starting Mira220 RGB-IR processing for {raw_filename}")
     raw_data = read_raw(raw_filename)
 
-    if calib_mode == "none":
-        print(f"[{get_timestamp()}] Skipping calibration")
-        calibrated_data = raw_data
-    else:
-        calibrated_data = apply_calibration(raw_data, calib_mode)
+    dark_frame = None
+    white_frame = None
+    if calib_flag in ["black", "both"]:
+        print(f"[{get_timestamp()}] Loading black.raw for dark calibration")
+        dark_frame = read_raw("black.raw")
+    if calib_flag in ["white", "both"]:
+        print(f"[{get_timestamp()}] Loading white.raw for white calibration")
+        white_frame = read_raw("white.raw")
 
+    calibrated_data = calibrate(raw_data, dark_frame, white_frame)
     print(f"[{get_timestamp()}] Debayering with horizontal flip")
     R, G, B, I = debayer_4x4_hflip(calibrated_data)
 
@@ -144,54 +135,57 @@ if __name__ == "__main__":
     rgbir_mosaic = create_rgbir_mosaic(R_corr, G_corr, B_corr, I)
     ndvi = calculate_ndvi(I, R_corr)
 
-    ndvi_mean, ndvi_median, ndvi_min, ndvi_max = (
-        ndvi.mean(), np.median(ndvi), ndvi.min(), ndvi.max()
-    )
+    ndvi_mean, ndvi_median, ndvi_min, ndvi_max = ndvi.mean(), np.median(ndvi), ndvi.min(), ndvi.max()
 
     print(f"\n[{get_timestamp()}] NDVI Statistics:")
     print(f"  Mean: {ndvi_mean:.3f}, Median: {ndvi_median:.3f}")
     print(f"  Range: [{ndvi_min:.3f}, {ndvi_max:.3f}]")
 
-    print(f"[{get_timestamp()}] Creating visualizations")
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
-    # Multi-panel visualization
-    fig = plt.figure(figsize=(16, 10))
-    ax1 = plt.subplot(2, 3, 1); ax1.imshow(rgb); ax1.set_title('RGB Image'); ax1.axis('off')
-    ax2 = plt.subplot(2, 3, 2); ax2.imshow(rgbir_mosaic); ax2.set_title('RGB-IR Mosaic'); ax2.axis('off')
-    ax3 = plt.subplot(2, 3, 3); ax3.imshow(R_corr, cmap='Reds'); ax3.set_title('Red'); ax3.axis('off')
-    ax4 = plt.subplot(2, 3, 4); ax4.imshow(G_corr, cmap='Greens'); ax4.set_title('Green'); ax4.axis('off')
-    ax5 = plt.subplot(2, 3, 5); ax5.imshow(B_corr, cmap='Blues'); ax5.set_title('Blue'); ax5.axis('off')
-    ax6 = plt.subplot(2, 3, 6); ax6.imshow(I, cmap='gray'); ax6.set_title('IR'); ax6.axis('off')
-    plt.tight_layout()
-    plt.savefig(f'{raw_filename}_Complete_{timestamp}.png', dpi=150, bbox_inches='tight')
-    plt.close()
-
     # NDVI visualization
-    colors_4 = ['red', 'yellow', 'lightgreen', 'darkgreen']
-    cmap_4 = ListedColormap(colors_4)
+    print(f"[{get_timestamp()}] Creating NDVI visualization (no numeric overlay)")
+
+    from matplotlib.colors import ListedColormap, BoundaryNorm
+
+    # Define NDVI color thresholds (below 0.1 = neutral gray)
+    colors_ndvi = ['gray', 'red', 'yellow', 'lightgreen', 'darkgreen']
+    bounds = [-1.0, 0.1, 0.3, 0.5, 0.7, 1.0]
+    cmap_ndvi = ListedColormap(colors_ndvi)
+    norm_ndvi = BoundaryNorm(bounds, cmap_ndvi.N)
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     fig = plt.figure(figsize=(16, 5))
+
+    # NDVI False Color
     ax1 = plt.subplot(1, 3, 1)
-    im = ax1.imshow(ndvi, cmap=cmap_4, vmin=-1, vmax=1)
-    ax1.set_title(f'NDVI False Color\nMean: {ndvi_mean:.3f}')
+    im = ax1.imshow(ndvi, cmap=cmap_ndvi, norm=norm_ndvi)
+    ax1.set_title(f'NDVI False Color (Custom Thresholds)\nMean: {ndvi_mean:.3f}', fontsize=12, fontweight='bold')
     ax1.axis('off')
-    plt.colorbar(im, ax=ax1, fraction=0.046, pad=0.04)
+    plt.colorbar(im, ax=ax1, fraction=0.046, pad=0.04, ticks=bounds)
+
+    # NDVI Histogram
     ax2 = plt.subplot(1, 3, 2)
     ax2.hist(ndvi.flatten(), bins=100, color='green', alpha=0.7, edgecolor='black')
+    ax2.set_xlabel('NDVI')
+    ax2.set_ylabel('Frequency')
+    ax2.set_title(f'NDVI Distribution\nMedian: {ndvi_median:.3f}', fontsize=12, fontweight='bold')
     ax2.axvline(ndvi_mean, color='red', linestyle='--', linewidth=2, label=f'Mean: {ndvi_mean:.3f}')
     ax2.axvline(ndvi_median, color='blue', linestyle='--', linewidth=2, label=f'Median: {ndvi_median:.3f}')
     ax2.legend()
+
+    # RGB + NDVI Overlay (no NDVI text)
     ax3 = plt.subplot(1, 3, 3)
     ax3.imshow(rgb)
     veg_mask = ndvi > 0
     ndvi_overlay = np.ma.masked_where(~veg_mask, ndvi)
-    im_overlay = ax3.imshow(ndvi_overlay, cmap=cmap_4, alpha=0.5, vmin=-1, vmax=1)
-    ax3.set_title('RGB + NDVI Overlay (Vegetation)')
+    im_overlay = ax3.imshow(ndvi_overlay, cmap=cmap_ndvi, norm=norm_ndvi, alpha=0.5)
+    ax3.set_title('RGB + NDVI Overlay (Vegetation)', fontsize=12, fontweight='bold')
     ax3.axis('off')
-    plt.colorbar(im_overlay, ax=ax3, fraction=0.046, pad=0.04)
+    plt.colorbar(im_overlay, ax=ax3, fraction=0.046, pad=0.04, ticks=bounds)
+
     plt.tight_layout()
     plt.savefig(f'{raw_filename}_NDVI_{timestamp}.png', dpi=150, bbox_inches='tight')
     plt.close()
 
     print(f"\n[{get_timestamp()}] Processing complete for {raw_filename}")
-    print(f"Calibration: {calib_mode.upper()}, Spectral correction: {spectral_flag.upper()}")
+    print(f"Spectral correction: {spectral_flag.upper()}")
+    print(f"Calibration: {calib_flag.upper()}")
