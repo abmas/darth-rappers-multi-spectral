@@ -40,7 +40,12 @@ os.makedirs(OUTPUT_DIR, exist_ok=True)
 # This is a "color recipe" that adjusts the R, G, B values to match
 # the true colors of the leaf. It's like adding spices to a recipe!
 #
-M = np.eye(4, dtype=np.float32)
+M = np.array([
+    [ 3.8798146,  -1.0125873,   0.03123079, -3.759391  ],
+    [-4.4472,      4.988873,   -2.482766,    5.090941  ],
+    [ 1.2792171,  -3.7578082,   5.13936,    -1.2770654 ],
+    [ 0.0,          0.0,          0.0,         2.0     ]
+], dtype=np.float32)
 
 # ============================================================
 # FUNCTION 1: Read a raw image file
@@ -597,10 +602,6 @@ def main():
 
     veg_mask = compute_vegetation_mask(R_corr, G_corr, B_corr, IR_corr)
 
-    # Save raw NDVI array for accurate comparison
-    np.save(f"{OUTPUT_DIR}/ndvi_raw_{method_name}.npy", ndvi)
-    print(f"✓ Saved raw NDVI array to: {OUTPUT_DIR}/ndvi_raw_{method_name}.npy")
-    
     # Create false-color NDVI and then overlay gray where not vegetation
     ndvi_falsecolor, sm = create_false_color_ndvi(ndvi)
     ndvi_falsecolor_masked = ndvi_falsecolor.copy()
