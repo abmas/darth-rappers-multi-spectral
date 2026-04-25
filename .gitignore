@@ -1,3 +1,6 @@
 venv/
 .venv/
 Vijay_0315_leaves_tif.tif
+__pycache__/
+*.pyc
+captures/
